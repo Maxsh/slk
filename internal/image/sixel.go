@@ -144,18 +144,30 @@ func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {
 	}
 }
 
-// thresholdAlpha clamps every pixel's alpha to fully opaque or fully
+// thresholdAlpha clamps every pixel to fully opaque or fully
 // transparent at the halfway point, in place. Scaling a transparent
 // image blends its edge with the canvas, producing half-covered pixels
 // that quantize to dark colors on the image's border; hard edges keep
 // those pixels out of the paint entirely.
+//
+// The kept pixels are un-premultiplied first: image.RGBA stores colors
+// multiplied by alpha, so a half-covered edge pixel holds a dimmed
+// color, and forcing its alpha to 255 alone would keep the dim as the
+// very dark fringe this exists to remove.
 func thresholdAlpha(img *image.RGBA) {
 	b := img.Pix
-	for i := 3; i < len(b); i += 4 {
-		if b[i] < 0x80 {
-			b[i] = 0
-		} else {
-			b[i] = 0xFF
+	for i := 0; i < len(b); i += 4 {
+		a := b[i+3]
+		switch {
+		case a < 0x80:
+			b[i], b[i+1], b[i+2], b[i+3] = 0, 0, 0, 0
+		case a < 0xFF:
+			// c ≤ a holds for premultiplied colors, so c*0xFF/a ≤ 0xFF
+			// and needs no clamp.
+			b[i] = uint8(uint16(b[i]) * 0xFF / uint16(a))
+			b[i+1] = uint8(uint16(b[i+1]) * 0xFF / uint16(a))
+			b[i+2] = uint8(uint16(b[i+2]) * 0xFF / uint16(a))
+			b[i+3] = 0xFF
 		}
 	}
 }

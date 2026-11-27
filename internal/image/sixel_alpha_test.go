@@ -28,20 +28,28 @@ func TestSixelRender_TransparentHeader(t *testing.T) {
 }
 
 // Bilinear-blended edge pixels must not survive as half-drawn dark
-// colors: thresholdAlpha clamps alpha to 0 or 255.
+// colors: thresholdAlpha clamps alpha to 0 or 255, and un-premultiplies
+// the kept pixels — image.RGBA stores colors scaled by alpha, so
+// raising the alpha alone would leave a dimmed, dark fringe.
 func TestThresholdAlpha(t *testing.T) {
-	img := image.NewRGBA(image.Rect(0, 0, 3, 1))
-	img.SetRGBA(0, 0, color.RGBA{R: 255, A: 10}) // nearly transparent
-	img.SetRGBA(1, 0, color.RGBA{A: 128})
-	img.SetRGBA(2, 0, color.RGBA{B: 255, A: 200})
+	img := image.NewRGBA(image.Rect(0, 0, 4, 1))
+	// All values are premultiplied, as image.RGBA stores them.
+	img.SetRGBA(0, 0, color.RGBA{R: 255, A: 10})                  // nearly transparent: dropped
+	img.SetRGBA(1, 0, color.RGBA{R: 128, G: 128, B: 128, A: 128}) // white at 50%: opaque white
+	img.SetRGBA(2, 0, color.RGBA{B: 200, A: 200})                 // blue premultiplied at 200: opaque blue
+	img.SetRGBA(3, 0, color.RGBA{R: 40, G: 30, B: 20, A: 255})    // opaque: untouched
 	thresholdAlpha(img)
 	cases := []struct {
 		x    int
-		want uint8
-	}{{0, 0}, {1, 255}, {2, 255}}
+		want color.RGBA
+	}{
+		{0, color.RGBA{A: 0}},
+		{1, color.RGBA{R: 255, G: 255, B: 255, A: 255}},
+		{2, color.RGBA{B: 255, A: 255}},
+		{3, color.RGBA{R: 40, G: 30, B: 20, A: 255}}}
 	for _, c := range cases {
-		if got := img.RGBAAt(c.x, 0).A; got != c.want {
-			t.Errorf("alpha at x=%d = %d, want %d", c.x, got, c.want)
+		if got := img.RGBAAt(c.x, 0); got != c.want {
+			t.Errorf("pixel at x=%d = %+v, want %+v", c.x, got, c.want)
 		}
 	}
 }
