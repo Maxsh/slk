@@ -99,6 +99,12 @@ func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {
 	pxH := target.Y * ch
 	resized := image.NewRGBA(image.Rect(0, 0, pxW, pxH))
 	draw.BiLinear.Scale(resized, resized.Bounds(), img, img.Bounds(), draw.Over, nil)
+	// Bilinear scaling blends edge pixels with the empty canvas they
+	// land on, so a transparent image's border arrives half-drawn at a
+	// dark blended color. Threshold the alpha back to fully opaque or
+	// fully transparent: go-sixel skips palette entries with zero
+	// alpha, which the terminal leaves unpainted.
+	thresholdAlpha(resized)
 
 	var sx bytes.Buffer
 	enc := gosixel.NewEncoder(&sx)
@@ -107,7 +113,15 @@ func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {
 			target.X, target.Y, err)
 		return HalfBlockRenderer{}.Render(img, target)
 	}
-	sixelBytes := sx.Bytes()
+	// go-sixel hardcodes the DECSIXEL introducer P2=0, which tells the
+	// terminal to paint every pixel the data leaves unset with its
+	// background color — a black box behind any transparent image. Patch
+	// our own output to P2=1 (transparent background): unset pixels keep
+	// the cells' text background, so an emoji sits on the pill tint, the
+	// selection tint, or the pane background. The raster attributes that
+	// follow (SixelPixelSize reads them) are unaffected.
+	payload := bytes.Replace(sx.Bytes(), []byte("\x1bP0;0;8q"), []byte("\x1bP0;1;8q"), 1)
+	sixelBytes := payload
 	debuglog.ImgRender("sixel.Render: target=(%d,%d) cell=(%d,%d) px=(%d,%d) sixel_bytes=%d",
 		target.X, target.Y, cw, ch, pxW, pxH, len(sixelBytes))
 
@@ -127,6 +141,22 @@ func (s *SixelRenderer) Render(img image.Image, target image.Point) Render {
 			_, err := w.Write(bs)
 			return err
 		},
+	}
+}
+
+// thresholdAlpha clamps every pixel's alpha to fully opaque or fully
+// transparent at the halfway point, in place. Scaling a transparent
+// image blends its edge with the canvas, producing half-covered pixels
+// that quantize to dark colors on the image's border; hard edges keep
+// those pixels out of the paint entirely.
+func thresholdAlpha(img *image.RGBA) {
+	b := img.Pix
+	for i := 3; i < len(b); i += 4 {
+		if b[i] < 0x80 {
+			b[i] = 0
+		} else {
+			b[i] = 0xFF
+		}
 	}
 }
 

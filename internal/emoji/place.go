@@ -171,6 +171,15 @@ func Place(ctx PlaceContext, url string, cells int) (string, func(io.Writer) err
 		// callers gate on image mode before calling.
 		proto = imgpkg.ProtoKitty
 	}
+	// Custom-only scope: a standard emoji's glyph costs nothing and
+	// (on a sixel terminal) its image would cost kilobytes per
+	// repaint, so decline and let the caller draw its glyph. Standard
+	// assets are exactly the ones this package builds URLs for;
+	// workspace customs live on emoji.slack-edge.com, and a custom
+	// alias to a standard emoji correctly counts as standard.
+	if ImageScope() == ScopeCustom && strings.HasPrefix(url, CDNBaseURL) {
+		return "", nil, false
+	}
 	target := goimage.Pt(cells, 1)
 	key := EmojiCacheKey(url)
 

@@ -16,6 +16,7 @@ var (
 	imageModeMu     sync.RWMutex
 	imageModeActive bool
 	imageModeCells  = 2
+	imageScope      = ScopeAll
 )
 
 // SetImageMode records whether emoji should be rendered as images.
@@ -48,10 +49,49 @@ func ImageModeCells() int {
 	return imageModeCells
 }
 
+// Scope selects which emoji the image path renders, when image mode is
+// active. ScopeAll (the zero value, every existing caller and test)
+// images everything with a resolvable URL. ScopeCustom images only
+// workspace custom emoji: on a sixel terminal a standard emoji costs
+// kilobytes of sixel per repaint where the terminal's own font draws a
+// sharp glyph for free, so the balanced default there images only what
+// has no glyph at all. Set once at startup, next to SetImageMode.
+type Scope int
+
+const (
+	ScopeAll Scope = iota
+	ScopeCustom
+)
+
+// String returns a human-readable scope name (used in logs).
+func (s Scope) String() string {
+	switch s {
+	case ScopeCustom:
+		return "custom"
+	default:
+		return "all"
+	}
+}
+
+// SetImageScope records which emoji the image path renders.
+func SetImageScope(s Scope) {
+	imageModeMu.Lock()
+	defer imageModeMu.Unlock()
+	imageScope = s
+}
+
+// ImageScope reports the active scope.
+func ImageScope() Scope {
+	imageModeMu.RLock()
+	defer imageModeMu.RUnlock()
+	return imageScope
+}
+
 // resetImageMode clears the mode. Test-only helper.
 func resetImageMode() {
 	imageModeMu.Lock()
 	defer imageModeMu.Unlock()
 	imageModeActive = false
 	imageModeCells = 2
+	imageScope = ScopeAll
 }

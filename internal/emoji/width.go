@@ -18,6 +18,11 @@ import (
 // each grapheme cluster recognized as an emoji image contributes the
 // configured cell footprint (typically 2) and all other clusters fall
 // through to lipgloss.
+//
+// Under ScopeCustom the string holds glyphs for standard emoji (which
+// lipgloss measures as the terminal draws them) and placeholder cells
+// for custom emoji (one width-1 rune per cell), so the image-cell
+// override would only lie: delegate to lipgloss there too.
 func Width(s string) int {
 	// Strip ANSI escape sequences first. Without this, uniseg would
 	// segment ESC bytes and parameter bytes as individual graphemes,
@@ -28,7 +33,7 @@ func Width(s string) int {
 	if !containsNonASCII(stripped) {
 		return lipgloss.Width(stripped)
 	}
-	if !ImageModeActive() {
+	if !ImageModeActive() || ImageScope() == ScopeCustom {
 		return lipgloss.Width(stripped)
 	}
 

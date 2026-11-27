@@ -532,8 +532,19 @@ func run() error {
 	reconciledImageMode := (proto == imgpkg.ProtoKitty || proto == imgpkg.ProtoSixel) &&
 		cfg.Appearance.EmojiImages == "on"
 	emojiwidth.SetImageMode(reconciledImageMode, cfg.Appearance.EmojiCells)
-	debuglog.ImgRender("emoji image mode: reconciled=%v (final proto=%s, emoji_images=%q)",
-		reconciledImageMode, proto, cfg.Appearance.EmojiImages)
+	// Scope: on a sixel terminal only custom emoji earn their bytes.
+	// A standard emoji has a sharp font glyph that costs nothing to
+	// draw, while its sixel image costs kilobytes on every repaint of
+	// its row; the balanced default there images only what has no
+	// glyph at all. Kitty terminals image everything, as they always
+	// have. See the sixel emoji design doc's performance section.
+	emojiScope := emojiwidth.ScopeAll
+	if proto == imgpkg.ProtoSixel {
+		emojiScope = emojiwidth.ScopeCustom
+	}
+	emojiwidth.SetImageScope(emojiScope)
+	debuglog.ImgRender("emoji image mode: reconciled=%v scope=%s (final proto=%s, emoji_images=%q)",
+		reconciledImageMode, emojiScope, proto, cfg.Appearance.EmojiImages)
 
 	// Avatars use kitty graphics when available (sharper), sixel on a
 	// sixel terminal, and half-block elsewhere. A sixel avatar is placed

@@ -259,7 +259,8 @@ protocol switches are introduced (same constraint as today).
 
 ## Implementation notes
 
-Where the implementation differs from the sections above:
+Where the implementation differs from the sections above, or was
+decided after measuring:
 
 1. **The store clear lives in the `CellMetricsChangedMsg` handler**
    (`internal/ui/reducer_io.go`), not in `applyCellPixels`: the handler
@@ -279,3 +280,36 @@ Where the implementation differs from the sections above:
    field, and `ProtoOff` (the zero `Protocol`) normalizes to
    `ProtoKitty` inside `Place`. Callers gate on image mode before
    calling, so the explicit `ProtoOff` case is unreachable.
+4. **Scope: on sixel, only custom emoji become images.** Measured with
+   the real Slack CDN assets (16x16 sources encoded at the emoji cell
+   footprint): a 2x1-cell sixel payload is 5.6-8.6 KB depending on the
+   terminal's cell pixel size, encoding 0.1-2.4 ms per emoji off the UI
+   thread. Memory is fine (about 12 KB per distinct emoji in cache and
+   store). Bandwidth is the cost: sixel re-sends the whole payload on
+   every repaint of its row, and scrolling rewrites every visible row,
+   so 20 visible emoji cost about 120 KB per scroll step. The painter's
+   slot skipping keeps steady-state quiet; the scroll case is what
+   rules out all-emoji sixel as a default. Since the mode-2027 glyph
+   fix draws every standard emoji sharply from the terminal's own font,
+   sixel images are reserved for what has no glyph: workspace customs.
+   `emoji.SetImageScope` (ScopeAll zero-value = today's behavior,
+   ScopeCustom) gates `emoji.Place` on the URL: standard assets (this
+   package's `CDNBaseURL`, custom aliases to them included) decline so
+   every surface falls through to its glyph rule. The image path's
+   token fallback (`renderEmojiTokensInline`) now runs the legacy
+   pipeline — skin tone stripped, glyph when `ShouldRenderUnicode`
+   passes, else `:name:` — so a declined emoji draws the same thing in
+   a body and in a pill. `emoji.Width` delegates to lipgloss entirely
+   under ScopeCustom (glyphs and placeholder cells both measure
+   correctly without the image-cell override). The reconcile sets
+   ScopeAll for kitty, ScopeCustom for sixel; `[appearance]
+   emoji_images` stays the on/off master switch.
+5. **Sixel transparency.** go-sixel hardcodes the DECSIXEL introducer
+   `P0;0;8q` (P2=0): the terminal paints every pixel the data leaves
+   unset with its own background, a black box behind any transparent
+   image on foot. `SixelRenderer.Render` patches its own output to
+   `P0;1;8q` (transparent background) and thresholds the scaled image's
+   alpha at the halfway point, because bilinear scaling blends a
+   transparent edge into the empty canvas it lands on and quantizes to
+   dark half-drawn border pixels. Both changes serve attachments,
+   avatars and previews too.

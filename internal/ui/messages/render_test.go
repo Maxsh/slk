@@ -1139,3 +1139,40 @@ func TestEphemeralLabel(t *testing.T) {
 		t.Errorf("regular message rendered the ephemeral label:\n%s", out)
 	}
 }
+
+// Under the custom-only scope a standard emoji's Place declines by
+// design; the fallback must draw the glyph the legacy path would, so
+// bodies stay consistent with reaction pills.
+func TestRenderEmojiTokensInline_ScopeCustomDrawsGlyph(t *testing.T) {
+	emojiutil.SetImageMode(true, 2)
+	emojiutil.SetImageScope(emojiutil.ScopeCustom)
+	emojiutil.SetGraphemeClusters(true)
+	t.Cleanup(func() {
+		emojiutil.SetGraphemeClusters(false)
+		emojiutil.SetImageScope(emojiutil.ScopeAll)
+		emojiutil.SetImageMode(false, 2)
+	})
+
+	thumbURL := emojiutil.CDNBaseURL + "1f44d.png"
+	tokens := []emojiutil.Token{
+		{Kind: emojiutil.TokenText, Text: "hi "},
+		{Kind: emojiutil.TokenEmoji, Text: ":thumbsup:", URL: thumbURL},
+		{Kind: emojiutil.TokenText, Text: " and "},
+		{Kind: emojiutil.TokenEmoji, Text: ":heart:", URL: emojiutil.CDNBaseURL + "2764-fe0f.png"},
+	}
+
+	// A fetcher is present (imageOK true), so the decline comes from
+	// the scope gate, not a missing fetcher.
+	ff := newFakePlaceFetcher()
+	pctx := emojiutil.PlaceContext{Fetcher: ff}
+
+	var flushes []func(io.Writer) error
+	got := renderEmojiTokensInline(tokens, pctx, 2, &flushes)
+	want := "hi 👍  and ❤️ "
+	if got != want {
+		t.Errorf("renderEmojiTokensInline scope-custom = %q, want %q", got, want)
+	}
+	if len(flushes) != 0 {
+		t.Errorf("flushes = %d, want 0 (nothing placed)", len(flushes))
+	}
+}

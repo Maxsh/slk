@@ -1033,10 +1033,19 @@ func renderEmojiTokensInline(
 					continue
 				}
 			}
-			// Fallback: plain-text form (":name:" for unresolved
-			// shortcodes / image-mode off, or the source-form glyph
-			// for raw-codepoint emoji that bypassed Place).
-			b.WriteString(tok.Text)
+			// Fallback: what this emoji draws without an image. When the
+			// image path is active but declined (the custom-only scope,
+			// a negative-cached URL), the legacy pipeline — skin tone
+			// stripped, glyph when the resolved form renders safely,
+			// else the :name: text — keeps body text consistent with
+			// reaction pills, whose fallback is the same rule. With the
+			// image path inactive the caller owns the legacy pipeline
+			// and the token's own text stands.
+			if imageOK {
+				b.WriteString(emojiutil.ResolveShortcodesInText(emojiutil.StripSkinToneFromText(tok.Text)))
+			} else {
+				b.WriteString(tok.Text)
+			}
 		}
 	}
 	return b.String()
