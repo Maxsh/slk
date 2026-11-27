@@ -354,6 +354,13 @@ var reduceIO reducerFunc = func(a *App, msg tea.Msg) (tea.Cmd, bool) {
 		}
 		a.sidebar.InvalidateCache()
 		a.preview.InvalidateMemo()
+		// The emoji payload store holds sixel bytes encoded against the
+		// old pixel size, and the emoji frame memo holds placements
+		// built from them; the next warm prerender re-encodes lazily.
+		if a.emojiSixel != nil {
+			a.emojiSixel.Clear()
+		}
+		a.emojiFrame.valid = false
 		a.forceSixelRepaint = true
 		debuglog.ImgRender("cell metrics changed to %dx%d px; image context re-pointed, encoded-image caches dropped", m.CellW, m.CellH)
 		return nil, true

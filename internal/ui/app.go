@@ -815,6 +815,13 @@ type App struct {
 	// placement (kitty_emulated.go).
 	kittyFrame kittyFrameMemo
 
+	// emojiSixel is the payload store the emoji PlaceContext carries on
+	// a sixel terminal (sixel_emoji.go); nil elsewhere. emojiFrame
+	// memoizes the last frame whose emoji placeholder cells were
+	// resolved into painter placements.
+	emojiSixel *imgpkg.SixelEmojiStore
+	emojiFrame emojiFrameMemo
+
 	// graphemeWidth records that the terminal reported unicode core
 	// mode (2027), so bubbletea lays frames out with grapheme widths.
 	// Set by reduceTerminalModes; read when resolving kitty frames.
@@ -4365,6 +4372,11 @@ func (a *App) threadSixelRect(frame panelLayoutFrame) wintree.Rect {
 // they are not gated on overlayActive like the sixel placements are:
 // DimmedOverlay already blanks the placeholders under a backdrop, and
 // the ones inside a modal (the reaction picker's emoji) must stay.
+//
+// On a sixel terminal with emoji image mode on, the frame's emoji
+// placeholder cells resolve the same way (resolveEmojiFrame, sixel
+// payloads from the shared store), appended to the pane placements
+// whose guards are re-stamped against the blanked frame.
 func (a *App) finalizeSixelView(v tea.View, placements []imgpkg.SixelPlacement) tea.View {
 	emulated := a.kittyEmulated()
 	if (a.imgProtocol != imgpkg.ProtoSixel && !emulated) || a.sixelFrames == nil {
@@ -4373,6 +4385,16 @@ func (a *App) finalizeSixelView(v tea.View, placements []imgpkg.SixelPlacement) 
 	}
 	if emulated {
 		v.Content, placements = a.resolveKittyFrame(v.Content)
+	} else if a.emojiSixelActive() {
+		// Emoji as sixel images: the frame's emoji placeholder cells
+		// become blank cells plus painter placements (sixel_emoji.go).
+		// The pane placements' guards must fingerprint the text
+		// bubbletea draws, which from here on is the blanked frame — a
+		// placeholder grapheme became a space of the same style.
+		blanked, emojiPlacements := a.resolveEmojiFrame(v.Content)
+		stampFrameGuards(blanked, placements)
+		placements = append(placements, emojiPlacements...)
+		v.Content = blanked
 	} else {
 		stampFrameGuards(v.Content, placements)
 	}
