@@ -256,3 +256,26 @@ protocol switches are introduced (same constraint as today).
    guard re-stamping, tests.
 4. `cmd/slk`: the reconcile change, `applyCellPixels` store clear.
 5. Goldens, then the manual pass on foot.
+
+## Implementation notes
+
+Where the implementation differs from the sections above:
+
+1. **The store clear lives in the `CellMetricsChangedMsg` handler**
+   (`internal/ui/reducer_io.go`), not in `applyCellPixels`: the handler
+   already invalidates every other pixel-size-keyed cache on the Update
+   goroutine, and the App owns its store reference there. `cmd/slk`
+   only creates the store and wires it into both the emoji
+   `PlaceContext` and `app.SetEmojiSixelStore`.
+2. **Phase 5's golden became behavioral tests**
+   (`internal/ui/sixel_emoji_test.go`): blanking + placement, two
+   adjacent identical emoji, missing payload, partial rect, the
+   finalize merge with re-stamped pane guards, the memo hit, and the
+   modal case. The kitty-emulated pipeline has no frame goldens either;
+   the resolver and painter it shares with this path are pinned by
+   their own tests.
+3. **`PlaceContext.Protocol`'s zero value stays kitty behavior** —
+   every existing caller and test builds a `PlaceContext` without the
+   field, and `ProtoOff` (the zero `Protocol`) normalizes to
+   `ProtoKitty` inside `Place`. Callers gate on image mode before
+   calling, so the explicit `ProtoOff` case is unreachable.

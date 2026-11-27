@@ -517,16 +517,20 @@ func run() error {
 	// probe can be skipped at startup. If the interactive kitty probe
 	// just above downgraded us to halfblock (zellij; tmux with
 	// allow-passthrough=off), image mode must be turned back OFF or:
-	//   - every emoji.Place() call misses the prerender memo (it
-	//     hard-codes ProtoKitty) and falls into a fetch→ready-msg→
-	//     re-render loop that pins the UI thread (see issue #50);
+	//   - every emoji.Place() call misses the prerender memo and falls
+	//     into a fetch→ready-msg→re-render loop that pins the UI thread
+	//     (see issue #50);
 	//   - every emoji.Width() call runs uniseg grapheme segmentation
 	//     instead of delegating to lipgloss.Width().
-	// Conversely, if we landed on ProtoKitty after the probe AND the
-	// user has emoji_images=on, make sure image mode is on — covers the
-	// case where pre-probe detection was conservative (e.g. preCfg load
-	// failed) but the real detect path succeeded.
-	reconciledImageMode := proto == imgpkg.ProtoKitty && cfg.Appearance.EmojiImages == "on"
+	// Conversely, if we landed on a protocol with an emoji image path
+	// after the probe AND the user has emoji_images=on, make sure image
+	// mode is on. Kitty (native or emulated placement) uploads through
+	// APC; sixel hands payloads to the frame painter through the shared
+	// SixelEmojiStore — each warm lookup hits the fetcher's memo under
+	// its own protocol, so neither loops. See
+	// docs/superpowers/specs/2026-11-27-sixel-emoji-images-design.md.
+	reconciledImageMode := (proto == imgpkg.ProtoKitty || proto == imgpkg.ProtoSixel) &&
+		cfg.Appearance.EmojiImages == "on"
 	emojiwidth.SetImageMode(reconciledImageMode, cfg.Appearance.EmojiCells)
 	debuglog.ImgRender("emoji image mode: reconciled=%v (final proto=%s, emoji_images=%q)",
 		reconciledImageMode, proto, cfg.Appearance.EmojiImages)
@@ -554,6 +558,12 @@ func run() error {
 	// SetImageContext after `p` is constructed to populate it (see
 	// below). Both calls share buildImgCtx so the only difference is
 	// the SendMsg callback.
+	// emojiSixelStore carries the sixel emoji payloads from the emoji
+	// PlaceContext (below, via buildPlaceCtx) to the App's frame exit,
+	// which turns placeholder cells into painter placements. One store
+	// per process, like the kitty registry.
+	emojiSixelStore := imgpkg.NewSixelEmojiStore()
+
 	buildImgCtx := func(send func(tea.Msg)) imgrender.ImageContext {
 		return imgrender.ImageContext{
 			Protocol:    proto,
@@ -572,6 +582,11 @@ func run() error {
 	buildPlaceCtx := func(send func(tea.Msg)) emojiwidth.PlaceContext {
 		return emojiwidth.PlaceContext{
 			Fetcher: imageFetcher,
+			// The emoji render protocol follows the terminal's: kitty
+			// uploads through APC, sixel paints through the frame
+			// painter with the shared payload store.
+			Protocol: proto,
+			Sixel:    emojiSixelStore,
 			SendMsg: func(v any) {
 				if send != nil {
 					if msg, ok := v.(tea.Msg); ok {
@@ -585,9 +600,10 @@ func run() error {
 	app.SetImageFetcher(imageFetcher)
 	app.SetImageProtocol(proto)
 
-	// Emoji-image rendering. Active only on kitty (per ImageMode
-	// gate set earlier in startup). When inactive the messages pane
-	// uses the legacy glyph/shortcode-text rendering path.
+	// Emoji-image rendering. Active on kitty and sixel terminals (per
+	// the ImageMode gate set earlier in startup). When inactive the
+	// messages pane uses the legacy glyph/shortcode-text rendering path.
+	app.SetEmojiSixelStore(emojiSixelStore)
 	app.SetEmojiContext(messages.EmojiContext{
 		PlaceCtx: buildPlaceCtx(nil), // SendMsg refreshed below once Program exists
 		Cells:    cfg.Appearance.EmojiCells,
