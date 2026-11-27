@@ -1,6 +1,7 @@
 package emoji
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -31,6 +32,23 @@ type PlaceContext struct {
 	// completes. Typically wraps bubbletea Program.Send. If nil, the
 	// fetch still runs but no re-render is signaled — useful in tests.
 	SendMsg func(msg any)
+
+	// Protocol selects how a warm placement reaches the terminal.
+	// ProtoKitty (also the zero-context default: every existing caller
+	// and test builds a PlaceContext without this field) uploads the
+	// image through kitty APC escapes fired into imgpkg.KittyOutput.
+	// ProtoSixel registers the paintable payload in Sixel and returns a
+	// placeholder row the App's frame resolver turns into a painter
+	// placement — no side channel, the payload rides the frame.
+	// ProtoOff normalizes to ProtoKitty here (Place is gated on image
+	// mode upstream, which is only on for kitty and sixel).
+	Protocol imgpkg.Protocol
+
+	// Sixel is the payload store for the ProtoSixel path, shared with
+	// the App's frame painter. Nil declines the sixel warm path, so the
+	// caller falls back to its glyph/text form rather than placing an
+	// image with no bytes behind it.
+	Sixel *imgpkg.SixelEmojiStore
 }
 
 // EmojiImageReadyMsg is dispatched via PlaceContext.SendMsg when a
@@ -110,19 +128,24 @@ func EmojiCacheKey(url string) string {
 	return "E-" + hex.EncodeToString(sum[:8])
 }
 
-// Place returns the kitty placement string + optional flush callback
+// Place returns the placement string + optional flush callback
 // for url at the given cell footprint (cells wide x 1 row tall).
 //
 // Returns ("", nil, false) when:
 //   - url is empty
 //   - ctx.Fetcher is nil
 //   - cells < 1
+//   - the warm path is a sixel hit whose payload cannot be lifted
+//     (no store, no flush, or a flush error)
 //
 // Warm path (image already fetched + prerendered for this cells target):
-// returns (placement, flush, true). placement is exactly cells chars
-// wide; flush MUST be invoked once per frame to upload the kitty
-// payload (idempotent via the registry — multiple invocations are
-// safe and the first wins).
+// returns (placement, flush, true). Under ProtoKitty the placement is
+// kitty's own placeholder row and flush MUST be invoked once per frame
+// to upload the kitty payload (idempotent via the registry — multiple
+// invocations are safe and the first wins). Under ProtoSixel the
+// placement is a kitty-style placeholder row the frame resolver decodes,
+// the payload is registered in ctx.Sixel keyed by the minted image ID,
+// and flush is nil — the painter paints the bytes with the frame.
 //
 // Cold path: returns (strings.Repeat(" ", cells), nil, true). Spawns
 // an async fetch (deduplicated per URL across all callers) and, on
@@ -141,14 +164,29 @@ func Place(ctx PlaceContext, url string, cells int) (string, func(io.Writer) err
 		return "", nil, false
 	}
 
+	proto := ctx.Protocol
+	if proto == imgpkg.ProtoOff {
+		// The zero PlaceContext means the kitty behavior Place has
+		// always had; an explicit ProtoOff is unreachable because
+		// callers gate on image mode before calling.
+		proto = imgpkg.ProtoKitty
+	}
 	target := goimage.Pt(cells, 1)
 	key := EmojiCacheKey(url)
 
-	// Warm path: a prerendered kitty placement string is ready in the
-	// fetcher's prerender memo. The fetcher's worker populated this
-	// off the UI thread when the fetch completed.
-	if r, ok := ctx.Fetcher.Prerendered(key, target, imgpkg.ProtoKitty); ok {
-		if len(r.Lines) > 0 {
+	// Warm path: a prerendered placement is ready in the fetcher's
+	// prerender memo, under the emoji render protocol. The fetcher's
+	// worker populated this off the UI thread when the fetch completed.
+	// A sixel memo entry carries space lines (the sixel renderer
+	// reserves its footprint in text), so the placement comes from the
+	// minted ID's placeholder row instead, and the payload is lifted
+	// into the store for the frame painter.
+	if r, ok := ctx.Fetcher.Prerendered(key, target, proto); ok {
+		if proto == imgpkg.ProtoSixel {
+			if placement, ok := placeSixelWarm(ctx, key, target, r); ok {
+				return placement, nil, true
+			}
+		} else if len(r.Lines) > 0 {
 			return r.Lines[0], r.OnFlush, true
 		}
 	}
@@ -160,6 +198,36 @@ func Place(ctx PlaceContext, url string, cells int) (string, func(io.Writer) err
 	// layout.
 	spawnEmojiFetch(ctx, key, url, target)
 	return strings.Repeat(" ", cells), nil, true
+}
+
+// placeSixelWarm lifts a warm prerendered sixel Render into ctx.Sixel
+// under a minted image ID and returns the placeholder row the App's
+// frame resolver decodes. Emoji are one row tall, so the placement is
+// the single row. ok is false when there is no store, no payload
+// flush, the flush errors, or no placeholder row came back — the
+// caller then takes the cold path rather than placing bytes it cannot
+// paint.
+func placeSixelWarm(ctx PlaceContext, key string, target goimage.Point, r imgpkg.Render) (string, bool) {
+	if ctx.Sixel == nil || r.OnFlush == nil {
+		return "", false
+	}
+	id := imgpkg.MintPlaceholderID(key, target)
+	if _, ok := ctx.Sixel.Get(id); !ok {
+		var payload bytes.Buffer
+		if err := r.OnFlush(&payload); err != nil {
+			return "", false
+		}
+		ctx.Sixel.Put(id, imgpkg.SixelEmojiEntry{
+			Bytes:    payload.Bytes(),
+			Fallback: r.Fallback,
+			Cells:    target,
+		})
+	}
+	lines := imgpkg.PlaceholderLinesFor(id, target)
+	if len(lines) == 0 {
+		return "", false
+	}
+	return lines[0], true
 }
 
 // PlaceShortcode places the emoji a Slack shortcode names (no colons,
